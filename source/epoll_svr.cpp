@@ -54,7 +54,8 @@ int child_process(int serverSocket)
     {
         // wait for epoll to unblock to report socket activity
         static struct epoll_event events[EPOLL_QUEUE_LEN];
-        int eventCount = epoll_wait(epoll,events,EPOLL_QUEUE_LEN, -1);
+        static int eventCount;
+        eventCount = epoll_wait(epoll,events,EPOLL_QUEUE_LEN, -1);
         if (eventCount < 0)
         {
             fatal_error("epoll_wait");
@@ -74,10 +75,12 @@ int child_process(int serverSocket)
             if (events[i].events&EPOLLIN &&
                 events[i].data.fd != serverSocket)
             {
-                // replace EPOLLIN flag with EPOLLOUT flag so it will
-                events[i].events = events[i].events&~EPOLLIN;
-                events[i].events = events[i].events|EPOLLOUT;
-                epoll_ctl(epoll,EPOLL_CTL_MOD,events[i].data.fd,&events[i]);
+                // replace EPOLLIN flag with EPOLLOUT flag so epoll will unblock
+                // when it is available for writing as well as reading.
+                static struct epoll_event event = epoll_event();
+                event.events = EPOLLOUT|EPOLLERR|EPOLLHUP|EPOLLET;
+                event.data.fd = events[i].data.fd;
+                epoll_ctl(epoll,EPOLL_CTL_MOD,events[i].data.fd,&event);
                 continue;
             }
 
@@ -85,21 +88,31 @@ int child_process(int serverSocket)
             if (events[i].events&EPOLLOUT &&
                 events[i].data.fd != serverSocket)
             {
-                // replace EPOLLOUT flag with EPOLLIN flag
-                events[i].events = events[i].events&~EPOLLOUT;
-                events[i].events = events[i].events|EPOLLIN;
-                epoll_ctl(epoll,EPOLL_CTL_MOD,events[i].data.fd,&events[i]);
-
-                // read data from socket, and write it back out immediately
+                // read data from socket...
                 char buf[ECHO_BUFFER_LEN];
                 int bytesRead = recv(events[i].data.fd,buf,ECHO_BUFFER_LEN,0);
-                if (bytesRead != 0)
+
+                if (bytesRead > 0)
                 {
+                    // echo the data back to the clients if data was read
                     send(events[i].data.fd,buf,bytesRead,0);
+
+                    // replace EPOLLOUT flag with EPOLLIN flag so epoll will unblock
+                    // if there is still data on the socket to read, or when more
+                    // data arrives.
+                    static struct epoll_event event = epoll_event();
+                    event.events = EPOLLIN|EPOLLERR|EPOLLHUP|EPOLLET;
+                    event.data.fd = events[i].data.fd;
+                    epoll_ctl(epoll,EPOLL_CTL_MOD,events[i].data.fd,&event);
                 }
                 else
                 {
+                    // close the socket if connection is closed or in error
                     close(events[i].data.fd);
+
+                    // remove the socket from the epoll loop
+                    static struct epoll_event event = epoll_event();
+                    epoll_ctl(epoll,EPOLL_CTL_DEL,events[i].data.fd,&event);
                 }
                 continue;
             }
@@ -129,7 +142,7 @@ int child_process(int serverSocket)
                 }
 
                 // add new socket to epoll loop
-                struct epoll_event event = epoll_event();
+                static struct epoll_event event = epoll_event();
                 event.events = EPOLLIN|EPOLLERR|EPOLLHUP|EPOLLET;
                 event.data.fd = newSocket;
                 if (epoll_ctl(epoll,EPOLL_CTL_ADD,newSocket,&event) == -1)
@@ -175,7 +188,7 @@ int main (int argc, char* argv[])
                     listeningPort = (int) strtol(optarg,&parsedCursor,10);
                     if (parsedCursor == optarg)
                     {
-                        fprintf(stderr,"invalid argument for option -%c\n",optopt);
+                        fprintf(stderr,"invalid argument for option -p\n");
                     }
                     else
                     {
@@ -189,7 +202,7 @@ int main (int argc, char* argv[])
                     numWorkerProcesses = (int) strtol(optarg,&parsedCursor,10);
                     if (parsedCursor == optarg)
                     {
-                        fprintf(stderr,"invalid argument for option -%c\n",optopt);
+                        fprintf(stderr,"invalid argument for option -n\n");
                     }
                     else
                     {
