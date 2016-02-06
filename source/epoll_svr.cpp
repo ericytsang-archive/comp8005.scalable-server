@@ -55,7 +55,7 @@ int child_process(int serverSocket)
         // wait for epoll to unblock to report socket activity
         static struct epoll_event events[EPOLL_QUEUE_LEN];
         static int eventCount;
-        eventCount = epoll_wait(epoll,events,EPOLL_QUEUE_LEN, -1);
+        eventCount = epoll_wait(epoll,events,EPOLL_QUEUE_LEN,-1);
         if (eventCount < 0)
         {
             fatal_error("epoll_wait");
@@ -238,7 +238,7 @@ int main (int argc, char* argv[])
     }
 
     // create server socket
-    serverSocket = make_tcp_server_socket(listeningPort,true);
+    serverSocket = make_tcp_server_socket(listeningPort,true).fd;
     if (serverSocket == -1)
     {
         fatal_error("socket");
@@ -248,17 +248,9 @@ int main (int argc, char* argv[])
     for(register int i = 0; i < numWorkerProcesses; ++i)
     {
         // if this is worker process, run worker process code
-        pid_t childPid = fork();
-        if (childPid == 0)
+        if (fork() == 0)
         {
             return child_process(serverSocket);
-        }
-
-        // else add the child process to process group so when parent is
-        // terminated, child processes will die too
-        else
-        {
-            setpgid(childPid,getpid());
         }
     }
     return server_process(numWorkerProcesses);

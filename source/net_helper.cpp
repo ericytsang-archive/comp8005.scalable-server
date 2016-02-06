@@ -38,7 +38,7 @@ static void fatal_error(const char* errstr);
  * @return     socket file descriptor to the new server socket. may return -1 on
  *   binding error.
  */
-int make_tcp_server_socket(short port, bool isNonBlocking)
+struct socket_t make_tcp_server_socket(short port, bool isNonBlocking)
 {
     // local address that server socket is bound to
     struct sockaddr localAddr;
@@ -84,7 +84,11 @@ int make_tcp_server_socket(short port, bool isNonBlocking)
     }
 
     // return...
-    return svrSock;
+    struct socket_t socket;
+    memset(&socket,0,sizeof(socket));
+    socket.fd = svrSock;
+    socket.localAddr = localAddr;
+    return socket;
 }
 
 /**
@@ -116,7 +120,7 @@ int make_tcp_server_socket(short port, bool isNonBlocking)
  * @return     socket file descriptor to the new connected client socket. may
  *   return -1 on error.
  */
-int make_tcp_client_socket(char* remoteName, long remoteAddr, short remotePort, short localPort)
+struct socket_t make_tcp_client_socket(char* remoteName, long remoteAddr, short remotePort, short localPort)
 {
     // local address that client socket is bound to
     struct sockaddr local;
@@ -153,7 +157,12 @@ int make_tcp_client_socket(char* remoteName, long remoteAddr, short remotePort, 
     }
 
     // return...
-    return clntSock;
+    struct socket_t socket;
+    memset(&socket,0,sizeof(socket_t));
+    socket.fd = clntSock;
+    socket.localAddr = local;
+    socket.remoteAddr = remote;
+    return socket;
 }
 
 /**
