@@ -1,21 +1,14 @@
+#include <ctype.h>
 #include <errno.h>
 #include <fcntl.h>
-#include <netinet/in.h>
-#include <stdlib.h>
-#include <sys/epoll.h>
-#include <sys/socket.h>
-#include <sys/types.h>
-#include <unistd.h>
-#include <netdb.h>
-#include <strings.h>
-#include <arpa/inet.h>
-#include <signal.h>
-#include <sysexits.h>
-#include <ctype.h>
 #include <stdio.h>
-#include <sys/prctl.h>
-#include <sys/types.h>
+#include <stdlib.h>
+#include <unistd.h>
+#include <strings.h>
+#include <sysexits.h>
 #include <sys/wait.h>
+#include <sys/epoll.h>
+#include <netinet/in.h>
 #include "net_helper.h"
 
 #define EPOLL_QUEUE_LEN 256
