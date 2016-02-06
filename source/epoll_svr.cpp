@@ -70,6 +70,17 @@ int child_process(int serverSocket)
                 continue;
             }
 
+            // handling case when client socket has data available for reading
+            if (events[i].events&EPOLLIN &&
+                events[i].data.fd != serverSocket)
+            {
+                // replace EPOLLIN flag with EPOLLOUT flag so it will
+                events[i].events = events[i].events&~EPOLLIN;
+                events[i].events = events[i].events|EPOLLOUT;
+                epoll_ctl(epoll,EPOLL_CTL_MOD,events[i].data.fd,&events[i]);
+                continue;
+            }
+
             // handling case when client socket has data available for writing
             if (events[i].events&EPOLLOUT &&
                 events[i].data.fd != serverSocket)
@@ -90,17 +101,6 @@ int child_process(int serverSocket)
                 {
                     close(events[i].data.fd);
                 }
-                continue;
-            }
-
-            // handling case when client socket has data available for reading
-            if (events[i].events&EPOLLIN &&
-                events[i].data.fd != serverSocket)
-            {
-                // replace EPOLLIN flag with EPOLLOUT flag
-                events[i].events = events[i].events&~EPOLLIN;
-                events[i].events = events[i].events|EPOLLOUT;
-                epoll_ctl(epoll,EPOLL_CTL_MOD,events[i].data.fd,&events[i]);
                 continue;
             }
 
@@ -160,8 +160,8 @@ int main (int argc, char* argv[])
     // number of worker process to create to server connections
     int numWorkerProcesses;
 
+    // parse command line arguments
     {
-        // parse command line arguments
         char option;
         int portInitialized = false;
         int numWorkerProcessesInitialized = false;

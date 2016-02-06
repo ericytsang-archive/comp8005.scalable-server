@@ -1,4 +1,4 @@
-CC = g++ -Wall -W -Wextra -std=c++11 -g
+CC = g++ -g -Wall -W -Wextra -std=c++11
 
 # clean
 clean:
