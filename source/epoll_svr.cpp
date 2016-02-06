@@ -97,9 +97,9 @@ int child_process(int serverSocket)
                     // echo the data back to the clients if data was read
                     send(events[i].data.fd,buf,bytesRead,0);
 
-                    // replace EPOLLOUT flag with EPOLLIN flag so epoll will unblock
-                    // if there is still data on the socket to read, or when more
-                    // data arrives.
+                    // replace EPOLLOUT flag with EPOLLIN flag so epoll will
+                    // unblock if there is still data on the socket to read, or
+                    // when more data arrives.
                     static struct epoll_event event = epoll_event();
                     event.events = EPOLLIN|EPOLLERR|EPOLLHUP|EPOLLET;
                     event.data.fd = events[i].data.fd;
