@@ -82,24 +82,33 @@ int child_process(int serverSocket)
             {
                 // read data from socket...
                 char buf[ECHO_BUFFER_LEN];
-                int bytesRead = recv(events[i].data.fd,buf,ECHO_BUFFER_LEN,0);
+                int bytesRead;
 
-                if (bytesRead > 0)
+                while ((bytesRead = recv(events[i].data.fd,buf,ECHO_BUFFER_LEN,0)) > 0)
                 {
                     // echo the data back to the clients if data was read
                     send(events[i].data.fd,buf,bytesRead,0);
-
-                    // replace EPOLLOUT flag with EPOLLIN flag so epoll will
-                    // unblock if there is still data on the socket to read, or
-                    // when more data arrives.
-                    static struct epoll_event event = epoll_event();
-                    event.events = EPOLLIN|EPOLLERR|EPOLLHUP|EPOLLET;
-                    event.data.fd = events[i].data.fd;
-                    epoll_ctl(epoll,EPOLL_CTL_MOD,events[i].data.fd,&event);
                 }
+
+                // replace EPOLLOUT flag with EPOLLIN flag so epoll will
+                // unblock if there is still data on the socket to read, or
+                // when more data arrives.
+                static struct epoll_event event = epoll_event();
+                event.events = EPOLLIN|EPOLLERR|EPOLLHUP|EPOLLET;
+                event.data.fd = events[i].data.fd;
+                epoll_ctl(epoll,EPOLL_CTL_MOD,events[i].data.fd,&event);
+
+                // if call would block, ignore it, and continue event loop
+                if (bytesRead == -1 && errno == EWOULDBLOCK)
+                {
+                    errno = 0;
+                }
+
+                // close socket if connection is closed or unexpected error
+                // occurs
                 else
                 {
-                    // close the socket if connection is closed or in error
+                    // close socket
                     close(events[i].data.fd);
 
                     // remove the socket from the epoll loop

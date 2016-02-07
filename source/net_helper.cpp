@@ -116,11 +116,13 @@ struct socket_t make_tcp_server_socket(short port, bool isNonBlocking)
  *   but not both.
  * @param      remotePort the remote host's port.
  * @param      localPort the local port. can be 0 if you don't care.
+ * @param      isNonBlocking true if the socket should be put into non blocking
+ *   mode; false otherwise.
  *
  * @return     socket file descriptor to the new connected client socket. may
  *   return -1 on error.
  */
-struct socket_t make_tcp_client_socket(char* remoteName, long remoteAddr, short remotePort, short localPort)
+struct socket_t make_tcp_client_socket(char* remoteName, long remoteAddr, short remotePort, short localPort, bool isNonBlocking)
 {
     // local address that client socket is bound to
     struct sockaddr local;
@@ -144,6 +146,16 @@ struct socket_t make_tcp_client_socket(char* remoteName, long remoteAddr, short 
             perror("failed to bind socket to local host");
             close(clntSock);
             clntSock = -1;
+        }
+    }
+
+    // make the server listening socket non-blocking if specified
+    if (isNonBlocking)
+    {
+        int existingFlags = fcntl(clntSock,F_GETFL,0);
+        if (existingFlags == -1 || fcntl(clntSock,F_SETFL,O_NONBLOCK|existingFlags) == -1)
+        {
+            fatal_error("fcntl");
         }
     }
 

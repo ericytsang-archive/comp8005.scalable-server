@@ -11,7 +11,7 @@ struct socket_t
 };
 
 struct socket_t make_tcp_server_socket(short port, bool isNonBlocking);
-struct socket_t make_tcp_client_socket(char* remoteName, long remoteAddr, short remotePort, short localPort);
+struct socket_t make_tcp_client_socket(char* remoteName, long remoteAddr, short remotePort, short localPort, bool isNonBlocking);
 struct sockaddr make_sockaddr(char* hostName, long hostAddr, short hostPort);
 int read_file(int socket, void* bufferPointer, int bytesToRead);
 
