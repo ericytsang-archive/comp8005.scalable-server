@@ -149,7 +149,6 @@ int child_process(char* remoteName,int remotePort,int numClients,char* data,unsi
                     clientPtr->timesTransmitted >= timesToRetransmit)
                 {
                     // close the socket
-                    fprintf(stderr,"// close(%d)\n",clientPtr->fd);
                     if (close(clientPtr->fd) == -1)
                     {
                         fatal_error("close");

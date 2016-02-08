@@ -58,6 +58,18 @@ struct socket_t make_tcp_server_socket(short port, bool isNonBlocking)
         fatal_error("failed to set sock opt to reuse address");
     }
 
+    // set sock opt to not linger after close
+    {
+        struct linger linger;
+        memset(&linger,0,sizeof(linger));
+        linger.l_onoff = 1;
+        linger.l_linger = 0;
+        if (setsockopt(svrSock,SOL_SOCKET,SO_LINGER,(char*) &linger,sizeof(linger)) == -1)
+        {
+            fatal_error("failed to set sock opt to not linger");
+        }
+    }
+
     // make the server listening socket non-blocking
     if (isNonBlocking)
     {
@@ -138,10 +150,24 @@ struct socket_t make_tcp_client_socket(char* remoteName, long remoteAddr, short 
     }
 
     // set sock opt to reuse address
-    int arg = 1;
-    if(setsockopt(clntSock,SOL_SOCKET,SO_REUSEADDR,&arg,sizeof(arg)) == -1)
     {
-        fatal_error("failed to set sock opt to reuse address");
+        int arg = 1;
+        if(setsockopt(clntSock,SOL_SOCKET,SO_REUSEADDR,&arg,sizeof(arg)) == -1)
+        {
+            fatal_error("failed to set sock opt to reuse address");
+        }
+    }
+
+    // set sock opt to not linger after close
+    {
+        struct linger linger;
+        memset(&linger,0,sizeof(linger));
+        linger.l_onoff = 1;
+        linger.l_linger = 0;
+        if (setsockopt(clntSock,SOL_SOCKET,SO_LINGER,(char*) &linger,sizeof(linger)) == -1)
+        {
+            fatal_error("failed to set sock opt to not linger");
+        }
     }
 
     // bind socket to local host if a local port is specified
