@@ -137,8 +137,15 @@ struct socket_t make_tcp_client_socket(char* remoteName, long remoteAddr, short 
         fatal_error("failed to create TCP socket");
     }
 
+    // set sock opt to reuse address
+    int arg = 1;
+    if(setsockopt(clntSock,SOL_SOCKET,SO_REUSEADDR,&arg,sizeof(arg)) == -1)
+    {
+        fatal_error("failed to set sock opt to reuse address");
+    }
+
     // bind socket to local host if a local port is specified
-    if(localPort)
+    if(clntSock > 0 && localPort)
     {
         local = make_sockaddr(0, INADDR_ANY, localPort);
         if(bind(clntSock, (struct sockaddr*) &local, sizeof(local)) == -1)
@@ -150,22 +157,33 @@ struct socket_t make_tcp_client_socket(char* remoteName, long remoteAddr, short 
     }
 
     // make the server listening socket non-blocking if specified
-    if (isNonBlocking)
+    if (clntSock > 0 && isNonBlocking)
     {
-        int existingFlags = fcntl(clntSock,F_GETFL,0);
-        if (existingFlags == -1 || fcntl(clntSock,F_SETFL,O_NONBLOCK|existingFlags) == -1)
+        int existingFlags = fcntl(clntSock, F_GETFL,0);
+        if (existingFlags == -1 || fcntl(clntSock, F_SETFL, O_NONBLOCK | existingFlags) == -1)
         {
-            fatal_error("fcntl");
+            fatal_error("failed to make socket non-blocking");
         }
     }
 
     // connect socket to remote host
     remote = make_sockaddr(remoteName, remoteAddr, remotePort);
-    if(connect(clntSock, (struct sockaddr*) &remote, sizeof(remote)) == -1)
+    if (clntSock > 0 && connect(clntSock, (struct sockaddr*) &remote, sizeof(remote)) == -1)
     {
-        perror("failed to connect to remote host");
-        close(clntSock);
-        clntSock = -1;
+        // check for fatal error. ignore EINPROGRESS error if socket is
+        // non-blocking because this is expected.
+        if (isNonBlocking && errno == EINPROGRESS)
+        {
+            errno = 0;
+        }
+
+        // propagate error otherwise
+        else
+        {
+            perror("failed to connect to remote host");
+            close(clntSock);
+            clntSock = -1;
+        }
     }
 
     // return...

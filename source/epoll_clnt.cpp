@@ -12,13 +12,14 @@
 #include <netinet/in.h>
 #include "net_helper.h"
 
-#define EPOLL_QUEUE_LEN 256
+#define EPOLL_QUEUE_LEN 2048
 #define ECHO_BUFFER_LEN 1024
 
 struct client_t
 {
-    int timesTransmitted;
-    int bytesReceived;
+    int fd;
+    unsigned int timesTransmitted;
+    unsigned int bytesReceived;
 };
 
 void fatal_error(char const * string)
@@ -28,7 +29,7 @@ void fatal_error(char const * string)
     exit(EX_OSERR);
 }
 
-int child_process(char* remoteName,int remotePort,int numClients,char* data,int timesToRetransmit)
+int child_process(char* remoteName,int remotePort,int numClients,char* data,unsigned int timesToRetransmit)
 {
     // create epoll file descriptor
     int epoll = epoll_create(EPOLL_QUEUE_LEN);
@@ -39,14 +40,14 @@ int child_process(char* remoteName,int remotePort,int numClients,char* data,int 
 
     // create all clients, call connect, and add them to epoll loop
     struct client_t clients[numClients];
-    memset(clients,0,sizeof(clients)*sizeof(struct client_t));
+    memset(clients,0,sizeof(clients));
     for (register int i = 0; i < numClients; ++i)
     {
         struct epoll_event event = epoll_event();
         event.events = EPOLLOUT|EPOLLERR|EPOLLHUP|EPOLLET;
-        event.data.fd = make_tcp_client_socket(remoteName,0,remotePort,0,true).fd;
+        clients[i].fd = make_tcp_client_socket(remoteName,0,remotePort,0,true).fd;
         event.data.ptr = clients+i;
-        if (epoll_ctl(epoll,EPOLL_CTL_ADD,event.data.fd,&event) == -1)
+        if (epoll_ctl(epoll,EPOLL_CTL_ADD,clients[i].fd,&event) == -1)
         {
             fatal_error("epoll_ctl");
         }
@@ -55,7 +56,7 @@ int child_process(char* remoteName,int remotePort,int numClients,char* data,int 
     // execute epoll event loop
     while (true)
     {
-        fprintf(stderr,"// wait for epoll to unblock to report socket activity\n");
+        // wait for epoll to unblock to report socket activity
         static struct epoll_event events[EPOLL_QUEUE_LEN];
         static int eventCount;
         eventCount = epoll_wait(epoll,events,EPOLL_QUEUE_LEN,-1);
@@ -64,53 +65,71 @@ int child_process(char* remoteName,int remotePort,int numClients,char* data,int 
             fatal_error("epoll_wait");
         }
 
-        fprintf(stderr,"// epoll unblocked; handle socket activity\n");
+        // epoll unblocked; handle socket activity
         for (register int i = 0; i < eventCount; i++)
         {
-            fprintf(stderr,"// close connection if an error occurred\n");
+            struct client_t* clientPtr = (struct client_t*) events[i].data.ptr;
+
+            // close connection if an error occurred
             if (events[i].events&(EPOLLHUP|EPOLLERR))
             {
-                fprintf(stderr,"// close connection\n");
-                close(events[i].data.fd);
-
-                fprintf(stderr,"// remove the socket from the epoll loop\n");
-                static struct epoll_event event = epoll_event();
-                epoll_ctl(epoll,EPOLL_CTL_DEL,events[i].data.fd,&event);
+                // close connection
+                close(clientPtr->fd);
                 continue;
             }
 
-            // handling case when client socket has data available for writing
+            // handling case when client socket is available for writing
             if (events[i].events&EPOLLOUT)
             {
-                fprintf(stderr, "// write data to socket\n");
-                send(events[i].data.fd,data,strlen(data),0);
+                // write data to socket
+                send(clientPtr->fd,data,strlen(data),0);
 
                 // update client structure
-                struct client_t* clientPtr = (struct client_t*) events[i].data.ptr;
                 clientPtr->timesTransmitted += 1;
 
                 // configure to wait for data to be available for reading
                 static struct epoll_event event = epoll_event();
                 event.events = EPOLLIN|EPOLLERR|EPOLLHUP|EPOLLET;
-                event.data.fd = events[i].data.fd;
-                epoll_ctl(epoll,EPOLL_CTL_MOD,events[i].data.fd,&event);
+                event.data.ptr = (void*) clientPtr;
+                epoll_ctl(epoll,EPOLL_CTL_MOD,clientPtr->fd,&event);
                 continue;
             }
 
-            // handling case when client socket has data available for reading
+            // handling case when client socket is available for reading
             if (events[i].events&EPOLLIN)
             {
-                fprintf(stderr, "// read data from socket\n");
-                char buf[ECHO_BUFFER_LEN];
-                int bytesRead = recv(events[i].data.fd,buf,ECHO_BUFFER_LEN,0);
+                static char buf[ECHO_BUFFER_LEN];
+                register int bytesRead = 0;
 
-                // update client structure
-                struct client_t* clientPtr = (struct client_t*) events[i].data.ptr;
-                clientPtr->bytesReceived += bytesRead;
+                // read until the socket is empty
+                while (true)
+                {
+                    // read data from socket
+                    bytesRead = recv(clientPtr->fd,buf,ECHO_BUFFER_LEN,0);
+
+                    // update client structure
+                    if (bytesRead > 0)
+                    {
+                        clientPtr->bytesReceived += bytesRead;
+                    }
+
+                    // ignore errors: EWOULDBLOCK and EAGAIN
+                    else if (bytesRead == -1 && (errno == EWOULDBLOCK || errno == EAGAIN))
+                    {
+                        errno = 0;
+                        break;
+                    }
+
+                    // unexpected error or closed; fatal error!
+                    else
+                    {
+                        fatal_error("recv");
+                    }
+                }
 
                 // handle case when all data has been read, and we need to
                 // retransmit
-                if (clientPtr->bytesReceived == sizeof(data) &&
+                if (clientPtr->bytesReceived >= strlen(data) &&
                     clientPtr->timesTransmitted < timesToRetransmit)
                 {
                     // update client structure
@@ -118,43 +137,51 @@ int child_process(char* remoteName,int remotePort,int numClients,char* data,int 
 
                     // configure to wait for data to be available for writing
                     static struct epoll_event event = epoll_event();
-                    event.events = EPOLLIN|EPOLLERR|EPOLLHUP|EPOLLET;
-                    event.data.fd = events[i].data.fd;
-                    epoll_ctl(epoll,EPOLL_CTL_MOD,events[i].data.fd,&event);
-                    continue;
-                }
-
-                // handle case when there should be more data to read
-                if (clientPtr->bytesReceived != sizeof(data))
-                {
+                    event.events = EPOLLOUT|EPOLLERR|EPOLLHUP|EPOLLET;
+                    event.data.ptr = (void*) clientPtr;
+                    epoll_ctl(epoll,EPOLL_CTL_MOD,clientPtr->fd,&event);
                     continue;
                 }
 
                 // handle case when client should be closed, and a new one
                 // should be opened in its place
-                if (clientPtr->bytesReceived == sizeof(data) &&
-                    clientPtr->timesTransmitted == timesToRetransmit)
+                if (clientPtr->bytesReceived >= strlen(data) &&
+                    clientPtr->timesTransmitted >= timesToRetransmit)
                 {
-                    // close the socket...
-                    close(events[i].data.fd);
+                    // close the socket
+                    fprintf(stderr,"// close(%d)\n",clientPtr->fd);
+                    if (close(clientPtr->fd) == -1)
+                    {
+                        fatal_error("close");
+                    }
 
-                    // remove the socket from the epoll loop
-                    static struct epoll_event event = epoll_event();
-                    epoll_ctl(epoll,EPOLL_CTL_DEL,events[i].data.fd,&event);
+                    // clear client data so the new client socket can make use
+                    // of it
+                    memset(clientPtr,0,sizeof(struct client_t));
 
                     // create and add a new client socket to event loop
-                    memset(&event,0,sizeof(event));
+                    static struct epoll_event event = epoll_event();
                     event.events = EPOLLOUT|EPOLLERR|EPOLLHUP|EPOLLET;
-                    event.data.fd = make_tcp_client_socket(remoteName,0,remotePort,0,true).fd;
-                    event.data.ptr = events[i].data.ptr;
-                    if (epoll_ctl(epoll,EPOLL_CTL_ADD,event.data.fd,&event) == -1)
+                    event.data.ptr = (void*) clientPtr;
+                    for (register int i = 0; i < 10; ++i)
+                    {
+                        clientPtr->fd = make_tcp_client_socket(remoteName,0,remotePort,0,true).fd;
+                        if (clientPtr->fd >= 0) break;
+                    }
+                    if (epoll_ctl(epoll,EPOLL_CTL_ADD,clientPtr->fd,&event) == -1)
                     {
                         fatal_error("epoll_ctl");
                     }
                     continue;
                 }
 
-                fatal_error(" should not reach this point in code!");
+                // handle case when there should be more data to read
+                if (clientPtr->bytesReceived < strlen(data))
+                {
+                    continue;
+                }
+
+                fatal_error("should not reach this point in code!");
             }
         }
     }
@@ -185,7 +212,7 @@ int main (int argc, char* argv[])
     char* data;
 
     // number of times each client should send their data
-    int timesToRetransmit;
+    unsigned int timesToRetransmit;
 
     // parse command line arguments
     {
@@ -307,11 +334,11 @@ int main (int argc, char* argv[])
         {
             if (i == 0)
             {
-                return child_process(remoteName,remotePort,numClients/numWorkerProcesses,data,timesToRetransmit);
+                return child_process(remoteName,remotePort,(numClients/numWorkerProcesses)+(numClients%numWorkerProcesses),data,timesToRetransmit);
             }
             else
             {
-                return child_process(remoteName,remotePort,(numClients/numWorkerProcesses)+(numClients%numWorkerProcesses),data,timesToRetransmit);
+                return child_process(remoteName,remotePort,numClients/numWorkerProcesses,data,timesToRetransmit);
             }
         }
     }

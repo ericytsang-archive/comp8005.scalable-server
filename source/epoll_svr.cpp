@@ -2,6 +2,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <stdio.h>
+#include <assert.h>
 #include <stdlib.h>
 #include <unistd.h>
 #include <strings.h>
@@ -11,7 +12,7 @@
 #include <netinet/in.h>
 #include "net_helper.h"
 
-#define EPOLL_QUEUE_LEN 256
+#define EPOLL_QUEUE_LEN 2048
 #define ECHO_BUFFER_LEN 1024
 
 void fatal_error(char const * string)
@@ -63,72 +64,50 @@ int child_process(int serverSocket)
                 continue;
             }
 
-            // handling case when client socket has data available for reading
-            if (events[i].events&EPOLLIN &&
-                events[i].data.fd != serverSocket)
-            {
-                // replace EPOLLIN flag with EPOLLOUT flag so epoll will unblock
-                // when it is available for writing as well as reading.
-                static struct epoll_event event = epoll_event();
-                event.events = EPOLLOUT|EPOLLERR|EPOLLHUP|EPOLLET;
-                event.data.fd = events[i].data.fd;
-                epoll_ctl(epoll,EPOLL_CTL_MOD,events[i].data.fd,&event);
-                continue;
-            }
+            assert(events[i].events&EPOLLIN);
 
-            // handling case when client socket has data available for writing
-            if (events[i].events&EPOLLOUT &&
-                events[i].data.fd != serverSocket)
+            // handling case when client socket has data available for reading
+            if (events[i].data.fd != serverSocket)
             {
                 // read data from socket...
-                char buf[ECHO_BUFFER_LEN];
-                int bytesRead;
+                static char buf[ECHO_BUFFER_LEN];
+                register int bytesRead;
 
+                // read and echo back to client
                 while ((bytesRead = recv(events[i].data.fd,buf,ECHO_BUFFER_LEN,0)) > 0)
                 {
-                    // echo the data back to the clients if data was read
                     send(events[i].data.fd,buf,bytesRead,0);
                 }
 
-                // replace EPOLLOUT flag with EPOLLIN flag so epoll will
-                // unblock if there is still data on the socket to read, or
-                // when more data arrives.
-                static struct epoll_event event = epoll_event();
-                event.events = EPOLLIN|EPOLLERR|EPOLLHUP|EPOLLET;
-                event.data.fd = events[i].data.fd;
-                epoll_ctl(epoll,EPOLL_CTL_MOD,events[i].data.fd,&event);
-
-                // if call would block, ignore it, and continue event loop
+                // if call would block, continue event loop
                 if (bytesRead == -1 && errno == EWOULDBLOCK)
                 {
                     errno = 0;
                 }
 
                 // close socket if connection is closed or unexpected error
-                // occurs
                 else
                 {
                     // close socket
                     close(events[i].data.fd);
-
-                    // remove the socket from the epoll loop
-                    static struct epoll_event event = epoll_event();
-                    epoll_ctl(epoll,EPOLL_CTL_DEL,events[i].data.fd,&event);
                 }
                 continue;
             }
 
             // handling case when server socket receives a connection request
-            if (events[i].events&EPOLLIN &&
-                events[i].data.fd == serverSocket)
+            else
             {
                 // accept the remote connection
                 int newSocket = accept(serverSocket,0,0);
 
+                // ignore EAGAIN because this socket is shared, and connection
+                // may have been accepted by another process
                 if (newSocket == -1 && errno != EAGAIN)
                 {
                     fatal_error("accept");
                 }
+
+                // propagate error if it is unexpected
                 else if (errno == EAGAIN)
                 {
                     errno = 0;
