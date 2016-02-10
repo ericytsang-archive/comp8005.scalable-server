@@ -11,6 +11,7 @@
 #include <sys/epoll.h>
 #include <netinet/in.h>
 #include "net_helper.h"
+#include "select_helper.h"
 
 #define EPOLL_QUEUE_LEN 2048
 #define ECHO_BUFFER_LEN 1024
@@ -24,59 +25,45 @@ void fatal_error(char const * string)
 
 int child_process(int serverSocket)
 {
-    // create epoll file descriptor
-    int epoll = epoll_create(EPOLL_QUEUE_LEN);
-    if (epoll == -1)
-    {
-        fatal_error("epoll_create");
-    }
+    // create selectable files set
+    Files files;
+    files_init(&files);
 
-    // add server socket to epoll event loop
-    {
-        struct epoll_event event = epoll_event();
-        event.events = EPOLLIN|EPOLLERR|EPOLLHUP|EPOLLET;
-        event.data.fd = serverSocket;
-        if (epoll_ctl(epoll,EPOLL_CTL_ADD,serverSocket,&event) == -1)
-        {
-            fatal_error("epoll_ctl");
-        }
-    }
+    // add server socket to select event loop
+    files_add_file(&files,serverSocket);
 
-    // execute epoll event loop
+    // execute select event loop
     while (true)
     {
-        // wait for epoll to unblock to report socket activity
-        static struct epoll_event events[EPOLL_QUEUE_LEN];
-        static int eventCount;
-        eventCount = epoll_wait(epoll,events,EPOLL_QUEUE_LEN,-1);
-        if (eventCount < 0)
+        // wait for select to unblock to report socket activity
+        // wait for an event on any socket to occur
+        if(files_select(&files) == -1)
         {
-            fatal_error("epoll_wait");
+            fatal_error("failed on select");
         }
 
-        // epoll unblocked; handle socket activity
-        for (register int i = 0; i < eventCount; i++)
+        // loop through sockets, and handle them
+        for(std::set<int>::iterator socketIt = files.fdSet.begin(); socketIt != files.fdSet.end(); ++socketIt)
         {
-            // close connection if an error occurred
-            if (events[i].events&(EPOLLHUP|EPOLLERR))
+            int curSock = *socketIt;
+
+            // if this socket doesn't have any activity, move on to next socket
+            if(!FD_ISSET(curSock,&files.selectFds))
             {
-                close(events[i].data.fd);
                 continue;
             }
 
-            assert(events[i].events&EPOLLIN);
-
             // handling case when client socket has data available for reading
-            if (events[i].data.fd != serverSocket)
+            if (curSock != serverSocket)
             {
                 // read data from socket...
                 static char buf[ECHO_BUFFER_LEN];
                 register int bytesRead;
 
                 // read and echo back to client
-                while ((bytesRead = recv(events[i].data.fd,buf,ECHO_BUFFER_LEN,0)) > 0)
+                while ((bytesRead = recv(curSock,buf,ECHO_BUFFER_LEN,0)) > 0)
                 {
-                    send(events[i].data.fd,buf,bytesRead,0);
+                    send(curSock,buf,bytesRead,0);
                 }
 
                 // if call would block, continue event loop
@@ -88,8 +75,9 @@ int child_process(int serverSocket)
                 // close socket if connection is closed or unexpected error
                 else
                 {
-                    // close socket
-                    close(events[i].data.fd);
+                    // close socket & remove from select event loop
+                    close(curSock);
+                    files_rm_file(&files,curSock);
                 }
                 continue;
             }
@@ -121,14 +109,8 @@ int child_process(int serverSocket)
                     fatal_error("fcntl");
                 }
 
-                // add new socket to epoll loop
-                static struct epoll_event event = epoll_event();
-                event.events = EPOLLIN|EPOLLERR|EPOLLHUP|EPOLLET;
-                event.data.fd = newSocket;
-                if (epoll_ctl(epoll,EPOLL_CTL_ADD,newSocket,&event) == -1)
-                {
-                    fatal_error("epoll_ctl");
-                }
+                // add new socket to select loop
+                files_add_file(&files,newSocket);
                 continue;
             }
         }
