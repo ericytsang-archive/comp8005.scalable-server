@@ -119,12 +119,10 @@ void print_statistics(int)
     printf("    minServiceTime: %lf ms\n",minServiceTime);
     printf("    maxServiceTime: %lf ms\n",maxServiceTime);
     printf("    avgServiceTime: %lf ms\n",avgServiceTime);
-    printf("\n");
     printf(" totalSessionCount: %li\n",totalSessionCount);
     printf("targetSessionCount: %li\n",targetSessionCount);
     printf("  peakSessionCount: %li\n",peakSessionCount);
     printf("      sessionsRate: %lf sessions served per second\n",(double) totalSessionCount/(totalRuntime/1000L));
-    printf("\n");
     printf("      totalRuntime: %li ms\n",totalRuntime);
 
     sem_post(printStatsLock);
