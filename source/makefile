@@ -1,4 +1,5 @@
 CC = g++ -g -Wall -W -Wextra
+LIBS = -pthread
 
 # clean
 clean:
@@ -6,10 +7,10 @@ clean:
 
 # compiling
 epoll_svr: ./epoll_svr.o ./net_helper.o
-	$(CC) -o ./epoll_svr.out ./epoll_svr.o ./net_helper.o
+	$(CC) $(LIBS) -o ./epoll_svr.out ./epoll_svr.o ./net_helper.o
 
 epoll_clnt: ./epoll_clnt.o ./net_helper.o
-	$(CC) -o ./epoll_clnt.out ./epoll_clnt.o ./net_helper.o
+	$(CC) $(LIBS) -o ./epoll_clnt.out ./epoll_clnt.o ./net_helper.o
 
 epoll_svr.o: ./epoll_svr.cpp
 	$(CC) -c ./epoll_svr.cpp

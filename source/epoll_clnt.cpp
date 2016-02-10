@@ -1,13 +1,17 @@
 #include <ctype.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <float.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
 #include <strings.h>
 #include <sysexits.h>
+#include <sys/mman.h>
+#include <sys/time.h>
 #include <sys/wait.h>
+#include <semaphore.h>
 #include <sys/epoll.h>
 #include <netinet/in.h>
 #include "net_helper.h"
@@ -15,11 +19,59 @@
 #define EPOLL_QUEUE_LEN 2048
 #define ECHO_BUFFER_LEN 1024
 
+/**
+ * pointer to a sem_t sized shared memory where a semaphore will be allocated
+ * onto. used by children processes to ensure exclusion when printing statistics
+ * upon termination.
+ */
+sem_t* printStatsLock = 0;
+
+/**
+ * duration of the shortest connection.
+ */
+double minServiceTime = DBL_MAX;
+
+/**
+ * duration of the longest connection.
+ */
+double maxServiceTime = 0;
+
+/**
+ * duration of the average service time.
+ */
+double avgServiceTime = 0;
+
+/**
+ * total number of connections made.
+ */
+unsigned long totalSessionCount = 0;
+
+/**
+ * highest number of concurrent connections in one moment.
+ */
+unsigned long peakSessionCount = 0;
+
+/**
+ * current number of concurrent connections.
+ */
+unsigned long sessionCount = 0;
+
+/**
+ * number of clients the process is managing (child process only).
+ */
+unsigned long targetSessionCount = 0;
+
+/**
+ * time stamp taken when child process started (child process only).
+ */
+long startTime = 0;
+
 struct client_t
 {
     int fd;
     unsigned int timesTransmitted;
     unsigned int bytesReceived;
+    long timeSynSent;
 };
 
 void fatal_error(char const * string)
@@ -29,8 +81,65 @@ void fatal_error(char const * string)
     exit(EX_OSERR);
 }
 
+void increment_session_count()
+{
+    sessionCount++;
+    if (peakSessionCount < sessionCount)
+        peakSessionCount = sessionCount;
+}
+
+void decrement_session_count(double instanceServiceTime)
+{
+    sessionCount--;
+    totalSessionCount++;
+
+    // update service times
+    if (minServiceTime > instanceServiceTime)
+        minServiceTime = instanceServiceTime;
+    if (maxServiceTime < instanceServiceTime)
+        maxServiceTime = instanceServiceTime;
+    double totalServiceTime = avgServiceTime*(totalSessionCount-1)+instanceServiceTime;
+    avgServiceTime = totalServiceTime/totalSessionCount;
+}
+
+long current_timestamp()
+{
+    struct timeval te;
+    gettimeofday(&te,0);
+    return te.tv_sec*1000L + te.tv_usec/1000;
+}
+
+void print_statistics(int)
+{
+    sem_wait(printStatsLock);
+
+    long totalRuntime = current_timestamp()-startTime;
+
+    printf("\n[%lu]\n",(unsigned long) getpid());
+    printf("    minServiceTime: %lf ms\n",minServiceTime);
+    printf("    maxServiceTime: %lf ms\n",maxServiceTime);
+    printf("    avgServiceTime: %lf ms\n",avgServiceTime);
+    printf("\n");
+    printf(" totalSessionCount: %li\n",totalSessionCount);
+    printf("targetSessionCount: %li\n",targetSessionCount);
+    printf("  peakSessionCount: %li\n",peakSessionCount);
+    printf("      sessionsRate: %lf sessions served per second\n",(double) totalSessionCount/(totalRuntime/1000L));
+    printf("\n");
+    printf("      totalRuntime: %li ms\n",totalRuntime);
+
+    sem_post(printStatsLock);
+
+    exit(0);
+}
+
 int child_process(char* remoteName,int remotePort,int numClients,char* data,unsigned int timesToRetransmit)
 {
+    targetSessionCount = numClients;
+    startTime = current_timestamp();
+
+    // set signal handler
+    signal(SIGINT,print_statistics);
+
     // create epoll file descriptor
     int epoll = epoll_create(EPOLL_QUEUE_LEN);
     if (epoll == -1)
@@ -43,10 +152,15 @@ int child_process(char* remoteName,int remotePort,int numClients,char* data,unsi
     memset(clients,0,sizeof(clients));
     for (register int i = 0; i < numClients; ++i)
     {
+        // create client socket, and setup client_t structure
+        client_t* clientPtr = clients+i;
+        clientPtr->fd = make_tcp_client_socket(remoteName,0,remotePort,0,true).fd;
+        clientPtr->timeSynSent = current_timestamp();
+
+        // add the client to the epoll event loop
         struct epoll_event event = epoll_event();
         event.events = EPOLLOUT|EPOLLERR|EPOLLHUP|EPOLLET;
-        clients[i].fd = make_tcp_client_socket(remoteName,0,remotePort,0,true).fd;
-        event.data.ptr = clients+i;
+        event.data.ptr = clientPtr;
         if (epoll_ctl(epoll,EPOLL_CTL_ADD,clients[i].fd,&event) == -1)
         {
             fatal_error("epoll_ctl");
@@ -83,6 +197,10 @@ int child_process(char* remoteName,int remotePort,int numClients,char* data,unsi
             {
                 // write data to socket
                 send(clientPtr->fd,data,strlen(data),0);
+
+                // update statistics
+                if (clientPtr->timesTransmitted == 0)
+                    increment_session_count();
 
                 // update client structure
                 clientPtr->timesTransmitted += 1;
@@ -148,6 +266,11 @@ int child_process(char* remoteName,int remotePort,int numClients,char* data,unsi
                 if (clientPtr->bytesReceived >= strlen(data) &&
                     clientPtr->timesTransmitted >= timesToRetransmit)
                 {
+
+                    // update statistics
+                    double serviceTime = (double) (current_timestamp()-clientPtr->timeSynSent);
+                    decrement_session_count(serviceTime);
+
                     // close the socket
                     if (close(clientPtr->fd) == -1)
                     {
@@ -157,6 +280,9 @@ int child_process(char* remoteName,int remotePort,int numClients,char* data,unsi
                     // clear client data so the new client socket can make use
                     // of it
                     memset(clientPtr,0,sizeof(struct client_t));
+
+                    // update statistics
+                    clientPtr->timeSynSent = current_timestamp();
 
                     // create and add a new client socket to event loop
                     static struct epoll_event event = epoll_event();
@@ -189,7 +315,10 @@ int child_process(char* remoteName,int remotePort,int numClients,char* data,unsi
 
 int server_process(int numWorkerProcesses)
 {
-    for (register int i = 0; i < numWorkerProcesses; ++i) wait(0);
+    // wait for all child processes to terminate
+    for (register int i = 0; i < numWorkerProcesses; ++i)
+        wait(0);
+
     return EX_OK;
 }
 
@@ -325,6 +454,19 @@ int main (int argc, char* argv[])
         }
     }
 
+    // setup IPC
+    printStatsLock = (sem_t*) mmap(0,sizeof(sem_t),PROT_READ|PROT_WRITE,MAP_SHARED|MAP_ANONYMOUS,-1,0);
+
+    if (printStatsLock == MAP_FAILED)
+    {
+        fatal_error("mmap");
+    }
+
+    if (sem_init(printStatsLock,1,1) < 0)
+    {
+        fatal_error("sem_init");
+    }
+
     // start the worker processes
     for(register int i = 0; i < numWorkerProcesses; ++i)
     {
@@ -341,5 +483,11 @@ int main (int argc, char* argv[])
             }
         }
     }
-    return server_process(numWorkerProcesses);
+    int returnValue = server_process(numWorkerProcesses);
+
+    // tear down IPC
+    sem_destroy(printStatsLock);
+    munmap(printStatsLock,sizeof(sem_t));
+
+    return returnValue;
 }
