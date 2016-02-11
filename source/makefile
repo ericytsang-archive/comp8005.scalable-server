@@ -6,6 +6,9 @@ clean:
 	rm -R *.out *.o
 
 # compiling
+thread_svr: ./thread_svr.o ./epoll_svr.o ./net_helper.o ./Semaphore.o
+	$(CC) $(LIBS) -o ./thread_svr.out ./thread_svr.o ./net_helper.o ./Semaphore.o
+
 select_svr: ./select_svr.o ./epoll_svr.o ./select_helper.o ./net_helper.o
 	$(CC) $(LIBS) -o ./select_svr.out ./select_helper.o ./epoll_svr.o ./net_helper.o
 
@@ -29,3 +32,6 @@ net_helper.o: ./net_helper.cpp ./net_helper.h
 
 select_helper.o: ./select_helper.cpp ./select_helper.h
 	$(CC) -c ./select_helper.cpp
+
+Semaphore.o: ./Semaphore.cpp ./Semaphore.h
+	$(CC) -c ./Semaphore.cpp
