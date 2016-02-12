@@ -168,6 +168,7 @@ int child_process(char* remoteName,int remotePort,int numClients,char* data,unsi
     // execute epoll event loop
     while (true)
     {
+        printf("current timestamp: %li\n",current_timestamp());
         // wait for epoll to unblock to report socket activity
         static struct epoll_event events[EPOLL_QUEUE_LEN];
         static int eventCount;
