@@ -313,6 +313,8 @@ int child_process(char* remoteName,int remotePort,int numClients,char* data,unsi
 
 int server_process(int numWorkerProcesses)
 {
+    signal(SIGINT,SIG_IGN);
+
     // wait for all child processes to terminate
     for (register int i = 0; i < numWorkerProcesses; ++i)
         wait(0);
