@@ -1,3 +1,4 @@
+#include <vector>
 #include <ctype.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -5,6 +6,7 @@
 #include <assert.h>
 #include <stdlib.h>
 #include <unistd.h>
+#include <pthread.h>
 #include <strings.h>
 #include <sysexits.h>
 #include <sys/wait.h>
@@ -15,15 +17,29 @@
 #define EPOLL_QUEUE_LEN 2048
 #define ECHO_BUFFER_LEN 1024
 
-void fatal_error(char const * string)
+struct WorkerRoutineParams
+{
+    int serverSocket;
+};
+
+static bool isInterrupted = false;
+
+static void sigint_handler(int)
+{
+    isInterrupted = true;
+}
+
+static void fatal_error(char const * string)
 {
     fprintf(stderr,"%s: ",string);
     perror(0);
     exit(EX_OSERR);
 }
 
-int child_process(int serverSocket)
+void* worker_routine(void* params)
 {
+    int serverSocket = ((WorkerRoutineParams*) params)->serverSocket;
+
     // create epoll file descriptor
     int epoll = epoll_create(EPOLL_QUEUE_LEN);
     if (epoll == -1)
@@ -43,7 +59,7 @@ int child_process(int serverSocket)
     }
 
     // execute epoll event loop
-    while (true)
+    while (!isInterrupted)
     {
         // wait for epoll to unblock to report socket activity
         static struct epoll_event events[EPOLL_QUEUE_LEN];
@@ -136,13 +152,75 @@ int child_process(int serverSocket)
     return EX_OK;
 }
 
-int server_process(int numWorkerProcesses)
+static int parse_command_line_arguments(int argc,char** argv,int* listeningPort,int* workerThreadCount)
 {
-    for (register int i = 0; i < numWorkerProcesses; ++i) wait(0);
-    return EX_OK;
+    char option;
+    int portInitialized = false;
+    int numWorkerProcessesInitialized = false;
+    while ((option = getopt(argc,argv,"p:n:")) != -1)
+    {
+        switch (option)
+        {
+        case 'p':
+            {
+                char* parsedCursor = optarg;
+                *listeningPort = (int) strtol(optarg,&parsedCursor,10);
+                if (parsedCursor == optarg)
+                {
+                    fprintf(stderr,"invalid argument for option -%c\n",option);
+                }
+                else
+                {
+                    portInitialized = true;
+                }
+                break;
+            }
+        case 'n':
+            {
+                char* parsedCursor = optarg;
+                *workerThreadCount = (int) strtol(optarg,&parsedCursor,10);
+                if (parsedCursor == optarg)
+                {
+                    fprintf(stderr,"invalid argument for option -%c\n",option);
+                }
+                else
+                {
+                    numWorkerProcessesInitialized = true;
+                }
+                break;
+            }
+        case '?':
+            {
+                if (isprint(optopt))
+                {
+                    fprintf(stderr,"unknown option \"-%c\".\n",optopt);
+                }
+                else
+                {
+                    fprintf(stderr,"unknown option character \"%x\".\n",optopt);
+                }
+            }
+        default:
+            {
+                fatal_error("");
+            }
+        }
+    }
+
+    // print usage and abort if not all required arguments were provided
+    if (!portInitialized &&
+        !numWorkerProcessesInitialized)
+    {
+        fprintf(stderr,"usage: %s [-p server listening port] [-n number of worker processes]\n",argv[0]);
+        return EX_USAGE;
+    }
+    else
+    {
+        return EX_OK;
+    }
 }
 
-int main (int argc, char* argv[])
+int main (int argc, char** argv)
 {
     // file descriptor to a server socket
     int serverSocket;
@@ -151,87 +229,46 @@ int main (int argc, char* argv[])
     int listeningPort;
 
     // number of worker process to create to server connections
-    int numWorkerProcesses;
+    int workerThreadCount;
 
     // parse command line arguments
+    if (parse_command_line_arguments(argc,argv,&listeningPort,&workerThreadCount) != 0)
     {
-        char option;
-        int portInitialized = false;
-        int numWorkerProcessesInitialized = false;
-        while ((option = getopt(argc,argv,"p:n:")) != -1)
-        {
-            switch (option)
-            {
-            case 'p':
-                {
-                    char* parsedCursor = optarg;
-                    listeningPort = (int) strtol(optarg,&parsedCursor,10);
-                    if (parsedCursor == optarg)
-                    {
-                        fprintf(stderr,"invalid argument for option -%c\n",option);
-                    }
-                    else
-                    {
-                        portInitialized = true;
-                    }
-                    break;
-                }
-            case 'n':
-                {
-                    char* parsedCursor = optarg;
-                    numWorkerProcesses = (int) strtol(optarg,&parsedCursor,10);
-                    if (parsedCursor == optarg)
-                    {
-                        fprintf(stderr,"invalid argument for option -%c\n",option);
-                    }
-                    else
-                    {
-                        numWorkerProcessesInitialized = true;
-                    }
-                    break;
-                }
-            case '?':
-                {
-                    if (isprint(optopt))
-                    {
-                        fprintf(stderr,"unknown option \"-%c\".\n",optopt);
-                    }
-                    else
-                    {
-                        fprintf(stderr,"unknown option character \"%x\".\n",optopt);
-                    }
-                }
-            default:
-                {
-                    fatal_error("");
-                }
-            }
-        }
+        fatal_error("failed to parse command line arguments");
+    }
 
-        // print usage and abort if not all required arguments were provided
-        if (!portInitialized &&
-            !numWorkerProcessesInitialized)
-        {
-            fprintf(stderr,"usage: %s [-p server listening port] [-n number of worker processes]\n",argv[0]);
-            return EX_USAGE;
-        }
+    // set signal handler
+    if (signal(SIGINT,sigint_handler) != 0)
+    {
+        fatal_error("signal");
     }
 
     // create server socket
-    serverSocket = make_tcp_server_socket(listeningPort,true).fd;
-    if (serverSocket == -1)
+    if ((serverSocket = make_tcp_server_socket(listeningPort,true).fd) == -1)
     {
         fatal_error("socket");
     }
 
+    // prepare worker thread parameters
+    WorkerRoutineParams workerRoutineParams;
+    workerRoutineParams.serverSocket = serverSocket;
+
     // start the worker processes
-    for(register int i = 0; i < numWorkerProcesses; ++i)
+    std::vector<pthread_t> threads(workerThreadCount);
+    for(register int i = 0; i < workerThreadCount; ++i)
     {
-        // if this is worker process, run worker process code
-        if (fork() == 0)
+        if (pthread_create(&threads[i],0,worker_routine,&workerRoutineParams) != 0)
         {
-            return child_process(serverSocket);
+            fatal_error("pthread_create");
         }
     }
-    return server_process(numWorkerProcesses);
+
+    // wait for children to terminate
+    for (register int i = 0; i < workerThreadCount; ++i)
+    {
+        void* unusedStatus;
+        pthread_join(threads[i],&unusedStatus);
+    }
+
+    return EX_OK;
 }
