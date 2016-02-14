@@ -182,7 +182,9 @@ int main (int argc, char* argv[])
         postOnAccept.wait();
         pthread_t thread;
         if (pthread_create(&thread,0,worker_routine,&workerRoutineParams) != 0)
+        {
             fatal_error("pthread_create");
+        }
         pthread_detach(thread);
     }
     return EX_OK;

@@ -168,6 +168,7 @@ int child_process(char* remoteName,int remotePort,int numClients,char* data,unsi
     // execute epoll event loop
     while (true)
     {
+        printf("current timestamp: %li\n",current_timestamp());
         // wait for epoll to unblock to report socket activity
         static struct epoll_event events[EPOLL_QUEUE_LEN];
         static int eventCount;
@@ -311,13 +312,23 @@ int child_process(char* remoteName,int remotePort,int numClients,char* data,unsi
     return EX_OK;
 }
 
-int server_process(int numWorkerProcesses)
+int server_process(int numWorkerProcesses,long timeout)
 {
-    signal(SIGINT,SIG_IGN);
+    // kill all processes of process group after timeout
+    if (timeout > 0)
+    {
+        usleep(timeout*1000);
+        kill(0,SIGINT);
+    }
 
     // wait for all child processes to terminate
-    for (register int i = 0; i < numWorkerProcesses; ++i)
-        wait(0);
+    else
+    {
+        for (register int i = 0; i < numWorkerProcesses; ++i)
+        {
+            wait(0);
+        }
+    }
 
     return EX_OK;
 }
@@ -342,6 +353,9 @@ int main (int argc, char* argv[])
     // number of times each client should send their data
     unsigned int timesToRetransmit;
 
+    // time in milliseconds that clients should run for
+    long lifetime;
+
     // parse command line arguments
     {
         char option;
@@ -351,7 +365,8 @@ int main (int argc, char* argv[])
         bool numClientsInitialized = false;
         bool dataInitialized = false;
         bool timesToRetransmitInitialized = false;
-        while ((option = getopt(argc,argv,"h:p:n:c:d:r:")) != -1)
+        bool lifetimeInitialized = false;
+        while ((option = getopt(argc,argv,"h:p:n:c:d:r:t:")) != -1)
         {
             switch (option)
             {
@@ -423,6 +438,20 @@ int main (int argc, char* argv[])
                     }
                     break;
                 }
+            case 't':
+                {
+                    char* parsedCursor = optarg;
+                    lifetime = (int) strtol(optarg,&parsedCursor,10);
+                    if (parsedCursor == optarg)
+                    {
+                        fprintf(stderr,"invalid argument for option -%c\n",option);
+                    }
+                    else
+                    {
+                        lifetimeInitialized = true;
+                    }
+                    break;
+                }
             case '?':
                 {
                     if (isprint (optopt))
@@ -441,6 +470,9 @@ int main (int argc, char* argv[])
             }
         }
 
+        // post-process user input
+        lifetime = lifetimeInitialized ? lifetime : -1;
+
         // print usage and abort if not all required arguments were provided
         if (!remoteNameInitialized ||
             !remotePortInitialized ||
@@ -449,7 +481,7 @@ int main (int argc, char* argv[])
             !dataInitialized ||
             !timesToRetransmitInitialized)
         {
-            fprintf(stderr,"usage: %s [-h server name] [-p server port] [-n number of worker processes] [-c number of clients] [-d data to send] [-r times to retransmit per client]\n",argv[0]);
+            fprintf(stderr,"usage: %s [-h server name] [-p server port] [-n number of worker processes] [-c number of clients] [-d data to send] [-r times to retransmit per client] [-t timeout]\n",argv[0]);
             return EX_USAGE;
         }
     }
@@ -483,7 +515,7 @@ int main (int argc, char* argv[])
             }
         }
     }
-    int returnValue = server_process(numWorkerProcesses);
+    int returnValue = server_process(numWorkerProcesses,lifetime);
 
     // tear down IPC
     sem_destroy(printStatsLock);
