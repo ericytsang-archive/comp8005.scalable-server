@@ -44,11 +44,9 @@
 #define ECHO_BUFFER_LEN 1024
 
 /**
- * pointer to a sem_t sized shared memory where a semaphore will be allocated
- * onto. used by children processes to ensure exclusion when printing statistics
- * upon termination.
+ * pipe used by children to pipe statistics back to the parent.
  */
-sem_t* printStatsLock = 0;
+int parentPipe[2];
 
 /**
  * duration of the shortest connection.
@@ -64,6 +62,26 @@ double maxServiceTime = 0;
  * duration of the average service time.
  */
 double avgServiceTime = 0;
+
+/**
+ * duration of the shortest round trip time.
+ */
+double minRtt = DBL_MAX;
+
+/**
+ * duration of the longest round trip time.
+ */
+double maxRtt = 0;
+
+/**
+ * duration of the average round trip time.
+ */
+double avgRtt = 0;
+
+/**
+ * total number of round trips made (echo requests).
+ */
+unsigned long totalRoundTrips = 0;
 
 /**
  * total number of connections made.
@@ -103,7 +121,34 @@ struct client_t
     unsigned int bytesReceived;
     // time stamp taken immediately before the call to connect
     long timeSynSent;
+    // time stamp taken immediately before an echo request was sent
+    long timeEchoSent;
 };
+
+/**
+ * structure that is piped back to the parent process for aggregation.
+ */
+struct stats
+{
+    // duration of the shortest connection.
+    double minServiceTime;
+    // duration of the longest connection.
+    double maxServiceTime;
+    // duration of the average service time.
+    double avgServiceTime;
+    // duration of the shortest round trip time.
+    double minRtt;
+    // duration of the longest round trip time.
+    double maxRtt;
+    // duration of the average round trip time.
+    double avgRtt;
+    // total number of round trips made (echo requests).
+    unsigned long totalRoundTrips;
+    // total number of connections made.
+    unsigned long totalSessionCount;
+};
+
+#define INITIALIZE_STATS {DBL_MAX,0,0,DBL_MAX,0,0,0,0}
 
 /**
  * prints the error message, then exits the program.
@@ -191,6 +236,39 @@ void decrement_session_count(double instanceServiceTime)
 }
 
 /**
+ * updates all of minRtt, maxRtt, totalRoundTrips, avgRtt given the instance
+ *   round trip time.
+ *
+ * @function   update_rtt
+ *
+ * @date       2016-02-14
+ *
+ * @revision   none
+ *
+ * @designer   Eric Tsang
+ *
+ * @programmer Eric Tsang
+ *
+ * @note       none
+ *
+ * @signature  void update_rtt(double instanceRtt)
+ *
+ * @param      instanceRtt round trip time for an echo.
+ */
+void update_rtt(double instanceRtt)
+{
+    totalRoundTrips++;
+
+    // update service times
+    if (minRtt > instanceRtt)
+        minRtt = instanceRtt;
+    if (maxRtt < instanceRtt)
+        maxRtt = instanceRtt;
+    double totalRtt = avgRtt*(totalRoundTrips-1)+instanceRtt;
+    avgRtt = totalRtt/totalRoundTrips;
+}
+
+/**
  * returns the current elapsed time since January 1, 1970 in milliseconds.
  *
  * @function   current_timestamp
@@ -238,21 +316,55 @@ long current_timestamp()
  */
 void print_statistics(int)
 {
-    sem_wait(printStatsLock);
+    // read and aggregate statistics
+    close(parentPipe[1]);
+    struct stats newStats;
+    struct stats mergedStats = INITIALIZE_STATS;
+    while (read_file(parentPipe[0],&newStats,sizeof(struct stats)) == sizeof(struct stats))
+    {
+        mergedStats.minServiceTime = newStats.minServiceTime < mergedStats.minServiceTime? newStats.minServiceTime : mergedStats.minServiceTime;
+        mergedStats.maxServiceTime = newStats.maxServiceTime > mergedStats.maxServiceTime? newStats.maxServiceTime : mergedStats.maxServiceTime;
+        mergedStats.avgServiceTime = (newStats.avgServiceTime*newStats.totalSessionCount+mergedStats.avgServiceTime*mergedStats.totalSessionCount)/(newStats.totalSessionCount+mergedStats.totalSessionCount);
+        mergedStats.totalSessionCount += newStats.totalSessionCount;
+        mergedStats.minRtt = newStats.minRtt < mergedStats.minRtt? newStats.minRtt : mergedStats.minRtt;
+        mergedStats.maxRtt = newStats.maxRtt > mergedStats.maxRtt? newStats.maxRtt : mergedStats.maxRtt;
+        mergedStats.avgRtt = (newStats.avgRtt*newStats.totalRoundTrips+mergedStats.avgRtt*mergedStats.totalRoundTrips)/(newStats.totalRoundTrips+mergedStats.totalRoundTrips);
+        mergedStats.totalRoundTrips += newStats.totalRoundTrips;
+    }
 
-    long totalRuntime = current_timestamp()-startTime;
+    printf("\n\n\n");
+    printf("    minServiceTime: %lf ms\n",mergedStats.minServiceTime);
+    printf("    maxServiceTime: %lf ms\n",mergedStats.maxServiceTime);
+    printf("    avgServiceTime: %lf ms\n",mergedStats.avgServiceTime);
+    printf(" totalSessionCount: %li\n",mergedStats.totalSessionCount);
+    printf("            minRtt: %lf ms\n",mergedStats.minRtt);
+    printf("            maxRtt: %lf ms\n",mergedStats.maxRtt);
+    printf("            avgRtt: %lf ms\n",mergedStats.avgRtt);
+    printf("   totalRoundTrips: %li\n",mergedStats.totalRoundTrips);
+    printf("\n\n\n");
 
-    printf("\n[%lu]\n",(unsigned long) getpid());
-    printf("    minServiceTime: %lf ms\n",minServiceTime);
-    printf("    maxServiceTime: %lf ms\n",maxServiceTime);
-    printf("    avgServiceTime: %lf ms\n",avgServiceTime);
-    printf(" totalSessionCount: %li\n",totalSessionCount);
-    printf("targetSessionCount: %li\n",targetSessionCount);
-    printf("  peakSessionCount: %li\n",peakSessionCount);
-    printf("      sessionsRate: %lf sessions served per second\n",(double) totalSessionCount/(totalRuntime/1000L));
-    printf("      totalRuntime: %li ms\n",totalRuntime);
+    exit(0);
+}
 
-    sem_post(printStatsLock);
+void write_statistics(int)
+{
+    // pipe the statistics back to the parent
+    struct stats stats;
+    stats.minServiceTime = minServiceTime;
+    stats.maxServiceTime = maxServiceTime;
+    stats.avgServiceTime = avgServiceTime;
+    stats.totalSessionCount = totalSessionCount;
+    stats.minRtt = minRtt;
+    stats.maxRtt = maxRtt;
+    stats.avgRtt = avgRtt;
+    stats.totalRoundTrips = totalRoundTrips;
+
+    if (write(parentPipe[1],&stats,sizeof(stats)) != sizeof(stats))
+    {
+        fatal_error("write");
+    }
+    close(parentPipe[0]);
+    close(parentPipe[1]);
 
     exit(0);
 }
@@ -292,7 +404,7 @@ int child_process(char* remoteName,int remotePort,int numClients,char* data,unsi
     startTime = current_timestamp();
 
     // set signal handler
-    signal(SIGINT,print_statistics);
+    signal(SIGINT,write_statistics);
 
     // create epoll file descriptor
     int epoll = epoll_create(EPOLL_QUEUE_LEN);
@@ -324,7 +436,6 @@ int child_process(char* remoteName,int remotePort,int numClients,char* data,unsi
     // execute epoll event loop
     while (true)
     {
-        printf("current timestamp: %li\n",current_timestamp());
         // wait for epoll to unblock to report socket activity
         static struct epoll_event events[EPOLL_QUEUE_LEN];
         static int eventCount;
@@ -359,6 +470,7 @@ int child_process(char* remoteName,int remotePort,int numClients,char* data,unsi
 
                 // update client structure
                 clientPtr->timesTransmitted += 1;
+                clientPtr->timeEchoSent = current_timestamp();
 
                 // configure to wait for data to be available for reading
                 static struct epoll_event event = epoll_event();
@@ -407,6 +519,8 @@ int child_process(char* remoteName,int remotePort,int numClients,char* data,unsi
                 {
                     // update client structure
                     clientPtr->bytesReceived = 0;
+                    double rtt = (double) (current_timestamp()-clientPtr->timeEchoSent);
+                    update_rtt(rtt);
 
                     // configure to wait for data to be available for writing
                     static struct epoll_event event = epoll_event();
@@ -418,13 +532,15 @@ int child_process(char* remoteName,int remotePort,int numClients,char* data,unsi
 
                 // handle case when client should be closed, and a new one
                 // should be opened in its place
-                if (clientPtr->bytesReceived >= strlen(data) &&
+                else if (clientPtr->bytesReceived >= strlen(data) &&
                     clientPtr->timesTransmitted >= timesToRetransmit)
                 {
 
                     // update statistics
                     double serviceTime = (double) (current_timestamp()-clientPtr->timeSynSent);
                     decrement_session_count(serviceTime);
+                    double rtt = (double) (current_timestamp()-clientPtr->timeEchoSent);
+                    update_rtt(rtt);
 
                     // close the socket
                     if (close(clientPtr->fd) == -1)
@@ -456,7 +572,7 @@ int child_process(char* remoteName,int remotePort,int numClients,char* data,unsi
                 }
 
                 // handle case when there should be more data to read
-                if (clientPtr->bytesReceived < strlen(data))
+                else if (clientPtr->bytesReceived < strlen(data))
                 {
                     continue;
                 }
@@ -495,6 +611,8 @@ int child_process(char* remoteName,int remotePort,int numClients,char* data,unsi
  */
 int server_process(int numWorkerProcesses,long timeout)
 {
+    signal(SIGINT,print_statistics);
+
     // kill all processes of process group after timeout
     if (timeout > 0)
     {
@@ -694,16 +812,9 @@ int main (int argc, char* argv[])
     }
 
     // setup IPC
-    printStatsLock = (sem_t*) mmap(0,sizeof(sem_t),PROT_READ|PROT_WRITE,MAP_SHARED|MAP_ANONYMOUS,-1,0);
-
-    if (printStatsLock == MAP_FAILED)
+    if (pipe(parentPipe) == -1)
     {
-        fatal_error("mmap");
-    }
-
-    if (sem_init(printStatsLock,1,1) < 0)
-    {
-        fatal_error("sem_init");
+        fatal_error("pipe");
     }
 
     // start the worker processes
@@ -725,8 +836,8 @@ int main (int argc, char* argv[])
     int returnValue = server_process(numWorkerProcesses,lifetime);
 
     // tear down IPC
-    sem_destroy(printStatsLock);
-    munmap(printStatsLock,sizeof(sem_t));
+    close(parentPipe[0]);
+    close(parentPipe[1]);
 
     return returnValue;
 }
