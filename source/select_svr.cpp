@@ -1,3 +1,20 @@
+/**
+ * implementation of the select server.
+ *
+ * @sourceFile select_svr.cpp
+ *
+ * @program    select_svr.out
+ *
+ * @date       2016-02-14
+ *
+ * @revision   none
+ *
+ * @designer   Eric Tsang
+ *
+ * @programmer Eric Tsang
+ *
+ * @note       none
+ */
 #include <ctype.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -13,9 +30,30 @@
 #include "net_helper.h"
 #include "select_helper.h"
 
-#define EPOLL_QUEUE_LEN 2048
+/**
+ * size of buffer used to read bytes into from TCP/IP sockets.
+ */
 #define ECHO_BUFFER_LEN 1024
 
+/**
+ * prints the error message, then exits the program.
+ *
+ * @function   fatal_error
+ *
+ * @date       2016-02-14
+ *
+ * @revision   none
+ *
+ * @designer   EricTsang
+ *
+ * @programmer EricTsang
+ *
+ * @note       none
+ *
+ * @signature  void fatal_error(const char* string)
+ *
+ * @param      string string to print before exiting the program
+ */
 void fatal_error(char const * string)
 {
     fprintf(stderr,"%s: ",string);
@@ -23,6 +61,29 @@ void fatal_error(char const * string)
     exit(EX_OSERR);
 }
 
+/**
+ * listens to the passed server socket, accepts new connection requests and
+ *   services them until application termination.
+ *
+ * @function   child_process
+ *
+ * @date       2016-02-14
+ *
+ * @revision   none
+ *
+ * @designer   Eric Tsang
+ *
+ * @programmer Eric Tsang
+ *
+ * @note       none
+ *
+ * @signature  int child_process(int serverSocket)
+ *
+ * @param      serverSocket server socket on the local host to accept and
+ *   service connection requests from.
+ *
+ * @return     exit code of the process.
+ */
 int child_process(int serverSocket)
 {
     // create selectable files set
@@ -118,12 +179,60 @@ int child_process(int serverSocket)
     return EX_OK;
 }
 
+/**
+ * waits for all child processes to terminate before terminating itself.
+ *
+ * @function   server_process
+ *
+ * @date       2016-02-14
+ *
+ * @revision   none
+ *
+ * @designer   Eric Tsang
+ *
+ * @programmer Eric Tsang
+ *
+ * @note       none
+ *
+ * @signature  int server_process(int numWorkerProcesses)
+ *
+ * @param      numWorkerProcesses number of child processes to wait for before
+ *   terminating.
+ *
+ * @return     exit code of the process.
+ */
 int server_process(int numWorkerProcesses)
 {
     for (register int i = 0; i < numWorkerProcesses; ++i) wait(0);
     return EX_OK;
 }
 
+/**
+ * main entry point of the application.
+ *
+ * parses command line arguments, then sets up IPC, and then spawns worker
+ *   processes to accept and service new connections until application
+ *   termination.
+ *
+ * @function   main
+ *
+ * @date       2016-02-14
+ *
+ * @revision   none
+ *
+ * @designer   Eric Tsang
+ *
+ * @programmer Eric Tsang
+ *
+ * @note       none
+ *
+ * @signature  int main (int argc, char* argv[])
+ *
+ * @param      argc number of command line arguments.
+ * @param      argv array of c-style strings.
+ *
+ * @return     exit code of the application.
+ */
 int main (int argc, char* argv[])
 {
     // file descriptor to a server socket

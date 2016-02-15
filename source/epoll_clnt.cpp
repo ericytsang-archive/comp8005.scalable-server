@@ -1,3 +1,20 @@
+/**
+ * implementation of the epoll client.
+ *
+ * @sourceFile select_svr.cpp
+ *
+ * @program    select_svr.out
+ *
+ * @date       2016-02-14
+ *
+ * @revision   none
+ *
+ * @designer   Eric Tsang
+ *
+ * @programmer Eric Tsang
+ *
+ * @note       none
+ */
 #include <ctype.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -16,7 +33,14 @@
 #include <netinet/in.h>
 #include "net_helper.h"
 
+/**
+ * size of events array passed to epoll_wait system function.
+ */
 #define EPOLL_QUEUE_LEN 2048
+
+/**
+ * size of buffer used to read bytes into from TCP/IP sockets.
+ */
 #define ECHO_BUFFER_LEN 1024
 
 /**
@@ -66,14 +90,40 @@ unsigned long targetSessionCount = 0;
  */
 long startTime = 0;
 
+/**
+ * structure associated with each client.
+ */
 struct client_t
 {
+    // file descriptor of client socket
     int fd;
+    // number of times we've made an echo request to the server
     unsigned int timesTransmitted;
+    // number of bytes received from the server for the current echo request
     unsigned int bytesReceived;
+    // time stamp taken immediately before the call to connect
     long timeSynSent;
 };
 
+/**
+ * prints the error message, then exits the program.
+ *
+ * @function   fatal_error
+ *
+ * @date       2016-02-14
+ *
+ * @revision   none
+ *
+ * @designer   EricTsang
+ *
+ * @programmer EricTsang
+ *
+ * @note       none
+ *
+ * @signature  void fatal_error(const char* string)
+ *
+ * @param      string string to print before exiting the program
+ */
 void fatal_error(char const * string)
 {
     fprintf(stderr,"%s: ",string);
@@ -81,6 +131,23 @@ void fatal_error(char const * string)
     exit(EX_OSERR);
 }
 
+/**
+ * increments the session count, and updates peakSessionCount is needed.
+ *
+ * @function   increment_session_count
+ *
+ * @date       2016-02-14
+ *
+ * @revision   none
+ *
+ * @designer   Eric Tsang
+ *
+ * @programmer Eric Tsang
+ *
+ * @note       none
+ *
+ * @signature  void increment_session_count()
+ */
 void increment_session_count()
 {
     sessionCount++;
@@ -88,6 +155,27 @@ void increment_session_count()
         peakSessionCount = sessionCount;
 }
 
+/**
+ * decrements the session count, and updates totalSessionCount, minServiceTime,
+ *   maxServiceTime, totalServiceTime and avgServiceTime as needed.
+ *
+ * @function   decrement_session_count
+ *
+ * @date       2016-02-14
+ *
+ * @revision   none
+ *
+ * @designer   Eric Tsang
+ *
+ * @programmer Eric Tsang
+ *
+ * @note       none
+ *
+ * @signature  void decrement_session_count(double instanceServiceTime)
+ *
+ * @param      instanceServiceTime service time for the session that is
+ *   finishing up.
+ */
 void decrement_session_count(double instanceServiceTime)
 {
     sessionCount--;
@@ -102,6 +190,25 @@ void decrement_session_count(double instanceServiceTime)
     avgServiceTime = totalServiceTime/totalSessionCount;
 }
 
+/**
+ * returns the current elapsed time since January 1, 1970 in milliseconds.
+ *
+ * @function   current_timestamp
+ *
+ * @date       2016-02-14
+ *
+ * @revision   none
+ *
+ * @designer   Eric Tsang
+ *
+ * @programmer Eric Tsang
+ *
+ * @note       none
+ *
+ * @signature  long current_timestamp()
+ *
+ * @return     the current elapsed time since January 1, 1970 in milliseconds.
+ */
 long current_timestamp()
 {
     struct timeval te;
@@ -109,6 +216,26 @@ long current_timestamp()
     return te.tv_sec*1000L + te.tv_usec/1000;
 }
 
+/**
+ * the SIGINT handler. acquires a inter-process lock, and prints the statistics
+ *   for this process to stdout.
+ *
+ * @function   print_statistics
+ *
+ * @date       2016-02-14
+ *
+ * @revision   none
+ *
+ * @designer   Eric Tsang
+ *
+ * @programmer Eric Tsang
+ *
+ * @note       none
+ *
+ * @signature  void print_statistics(int)
+ *
+ * @param      int unused!
+ */
 void print_statistics(int)
 {
     sem_wait(printStatsLock);
@@ -130,6 +257,35 @@ void print_statistics(int)
     exit(0);
 }
 
+/**
+ * manages a number of clients that continuously connect and make echo requests
+ *   to the remote server.
+ *
+ * @function   child_process
+ *
+ * @date       2016-02-14
+ *
+ * @revision   none
+ *
+ * @designer   Eric Tsang
+ *
+ * @programmer Eric Tsang
+ *
+ * @note       none
+ *
+ * @signature  int child_process(char* remoteName,int remotePort,int numClients,
+ *   char* data,unsigned int timesToRetransmit)
+ *
+ * @param      remoteName name of the remote host to connect to.
+ * @param      remotePort port of the remote host to connect to.
+ * @param      numClients number of clients to make to connect to the remote
+ *   host simultaneously for this process.
+ * @param      data data to send for the echo requests for each client.
+ * @param      timesToRetransmit number of echo requests to make for each
+ *   connection.
+ *
+ * @return     exit code of this process.
+ */
 int child_process(char* remoteName,int remotePort,int numClients,char* data,unsigned int timesToRetransmit)
 {
     targetSessionCount = numClients;
@@ -312,6 +468,31 @@ int child_process(char* remoteName,int remotePort,int numClients,char* data,unsi
     return EX_OK;
 }
 
+/**
+ * waits {timeout} milliseconds before terminating the application, or if
+ *   {timeout} is negative, will not automatically terminate the application,
+ *   and just waits for all child processes to terminate instead.
+ *
+ * @function   server_process
+ *
+ * @date       2016-02-14
+ *
+ * @revision   none
+ *
+ * @designer   Eric Tsang
+ *
+ * @programmer Eric Tsang
+ *
+ * @note       none
+ *
+ * @signature  int server_process(int numWorkerProcesses,long timeout)
+ *
+ * @param      numWorkerProcesses number of child processes that exist.
+ * @param      timeout time in milliseconds to wait before terminating all
+ *   processes. if negative, will not terminate the application.
+ *
+ * @return     exit code of the process
+ */
 int server_process(int numWorkerProcesses,long timeout)
 {
     // kill all processes of process group after timeout
@@ -333,6 +514,32 @@ int server_process(int numWorkerProcesses,long timeout)
     return EX_OK;
 }
 
+/**
+ * main entry point of the application.
+ *
+ * parses command line arguments, then sets up IPC, and then spawns worker
+ *   processes to make connections with the remote server until application
+ *   termination.
+ *
+ * @function   main
+ *
+ * @date       2016-02-14
+ *
+ * @revision   none
+ *
+ * @designer   Eric Tsang
+ *
+ * @programmer Eric Tsang
+ *
+ * @note       none
+ *
+ * @signature  int main (int argc, char* argv[])
+ *
+ * @param      argc number of command line arguments.
+ * @param      argv array of c-style strings.
+ *
+ * @return     exit code of the application.
+ */
 int main (int argc, char* argv[])
 {
     // name of remote host to connect to

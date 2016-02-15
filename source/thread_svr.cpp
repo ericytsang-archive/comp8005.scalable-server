@@ -1,3 +1,20 @@
+/**
+ * implementation of the multi-threaded server.
+ *
+ * @sourceFile thread_svr.cpp
+ *
+ * @program    thread_svr.out
+ *
+ * @date       2016-02-14
+ *
+ * @revision   none
+ *
+ * @designer   Eric Tsang
+ *
+ * @programmer Eric Tsang
+ *
+ * @note       none
+ */
 #include <ctype.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -14,9 +31,30 @@
 #include "net_helper.h"
 #include "Semaphore.h"
 
-#define EPOLL_QUEUE_LEN 2048
+/**
+ * size of buffer used to read bytes into from TCP/IP sockets.
+ */
 #define ECHO_BUFFER_LEN 1024
 
+/**
+ * prints the error message, then exits the program.
+ *
+ * @function   fatal_error
+ *
+ * @date       2016-02-14
+ *
+ * @revision   none
+ *
+ * @designer   EricTsang
+ *
+ * @programmer EricTsang
+ *
+ * @note       none
+ *
+ * @signature  void fatal_error(const char* string)
+ *
+ * @param      string string to print before exiting the program
+ */
 void fatal_error(char const * string)
 {
     fprintf(stderr,"%s: ",string);
@@ -24,12 +62,36 @@ void fatal_error(char const * string)
     exit(EX_OSERR);
 }
 
+/**
+ * a pointer of this structure is passed as the parameter for the thread running
+ *   worker_routine.
+ */
 struct WorkerRoutineParams
 {
     Semaphore* postOnAcceptPtr;
     int* serverSocketPtr;
 };
 
+/**
+ * thread routine that accepts a connection from the server socket, and services
+ *   it. once the connection closes, the thread terminates.
+ *
+ * @function   worker_routine
+ *
+ * @date       2016-02-14
+ *
+ * @revision   none
+ *
+ * @designer   Eric Tsang
+ *
+ * @programmer Eric Tsang
+ *
+ * @note       none
+ *
+ * @signature  void* worker_routine(void* voidParams)
+ *
+ * @param      voidParams pointer to a WorkerRoutineParams structure.
+ */
 void* worker_routine(void* voidParams)
 {
     WorkerRoutineParams* params = (WorkerRoutineParams*) voidParams;
@@ -86,6 +148,31 @@ void* worker_routine(void* voidParams)
     pthread_exit(0);
 }
 
+/**
+ * the main entry point to the application.
+ *
+ * parses command line arguments, opens the server socket, sets up IPC and
+ *   continuously tops off the idle thread pool until SIGINT is received.
+ *
+ * @function   main
+ *
+ * @date       2016-02-14
+ *
+ * @revision   none
+ *
+ * @designer   Eric Tsang
+ *
+ * @programmer Eric Tsang
+ *
+ * @note       none
+ *
+ * @signature  int main (int argc, char* argv[])
+ *
+ * @param      argc number of command line arguments.
+ * @param      argv array of c-style strings.
+ *
+ * @return     exit code of the application.
+ */
 int main (int argc, char* argv[])
 {
     // file descriptor to a server socket
